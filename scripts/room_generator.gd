@@ -1,3 +1,5 @@
+class_name RoomGenerator
+
 extends Node3D
 
 ## Procedural room generator.
