@@ -30,7 +30,24 @@ extends CharacterBody3D
 @export var mouse_sensitivity: float = 0.0023
 @export var max_pitch: float = 1.45
 
+@export_category("Head Bob")
+@export var bob_enabled: bool = true
+@export var bob_frequency: float = 1.8
+@export var bob_vertical_amplitude: float = 0.055
+@export var bob_lateral_amplitude: float = 0.035
+@export var bob_roll_amplitude: float = 0.025
+@export var bob_smoothing: float = 10.0
+@export var sprint_bob_multiplier: float = 1.08
+
 @onready var view_pivot: Node3D = $ViewPivot
+@onready var camera: Camera3D = $ViewPivot/Camera3D
+
+const CAMERA_REST_POSITION := Vector3(0.0, 1.5, 0.0)
+
+var bob_phase: float = 0.0
+var bob_amount: float = 0.0
+var bob_position_offset := Vector3.ZERO
+var bob_roll: float = 0.0
 
 
 var surface_up: Vector3 = Vector3.UP
@@ -44,6 +61,11 @@ var look_forward: Vector3 = Vector3.FORWARD
 var pitch: float = 0.0
 var _mouse_captured := true
 var _last_surface_name := "FLOOR"
+
+# Prevent the controller from switching back and forth between two normals
+# while the capsule is physically touching a 90-degree corner.
+var _surface_transition_lock: float = 0.0
+@export var surface_transition_lock_time: float = 0.38
 
 
 func _ready() -> void:
@@ -90,6 +112,12 @@ func _input(event: InputEvent) -> void:
 
 
 func _physics_process(delta: float) -> void:
+    if _surface_transition_lock > 0.0:
+        _surface_transition_lock = maxf(
+            0.0,
+            _surface_transition_lock - delta
+        )
+
     # Use the surface from the previous frame for this movement step.
     up_direction = surface_up
 
@@ -97,7 +125,7 @@ func _physics_process(delta: float) -> void:
 
     var input_2d := Vector2(
         float(Input.is_key_pressed(KEY_D)) - float(Input.is_key_pressed(KEY_A)),
-        float(Input.is_key_pressed(KEY_S)) - float(Input.is_key_pressed(KEY_W))
+        float(Input.is_key_pressed(KEY_W)) - float(Input.is_key_pressed(KEY_S))
     )
 
     if input_2d.length_squared() > 1.0:
@@ -150,7 +178,15 @@ func _physics_process(delta: float) -> void:
         velocity = planar_velocity + surface_up * normal_velocity
 
     # The actual collision happens first.
+    var velocity_before_collision := velocity
     move_and_slide()
+
+    # Keep the gait camera driven by the motion that existed immediately
+    # before collision resolution.
+    var planar_speed := _project_on_plane(
+        velocity_before_collision,
+        surface_up
+    ).length()
 
     # Now inspect what we REALLY hit this frame. This catches:
     #   floor -> wall
@@ -158,7 +194,7 @@ func _physics_process(delta: float) -> void:
     #   wall -> ceiling
     #   ceiling -> wall
     # without relying on a particular camera/basis direction.
-    var collision_normal := _find_transition_normal()
+    var collision_normal := _find_transition_normal(velocity_before_collision)
 
     if collision_normal.length_squared() > 0.0001:
         _set_target_surface(collision_normal)
@@ -173,15 +209,18 @@ func _physics_process(delta: float) -> void:
     if is_on_floor():
         apply_floor_snap()
 
+    _update_head_bob(delta, planar_speed, is_on_floor())
     _update_surface_name()
 
 
-func _find_transition_normal() -> Vector3:
+func _find_transition_normal(approach_velocity: Vector3) -> Vector3:
     if get_slide_collision_count() == 0:
         return Vector3.ZERO
 
     var best_normal := Vector3.ZERO
-    var best_score := 2.0
+    var best_score := -INF
+
+    var approach := approach_velocity.normalized()
 
     for index in range(get_slide_collision_count()):
         var collision := get_slide_collision(index)
@@ -189,14 +228,30 @@ func _find_transition_normal() -> Vector3:
 
         # Ignore surfaces that are basically the plane we're already walking on.
         var same_surface := normal.dot(surface_up)
-
         if same_surface >= surface_change_dot:
             continue
 
-        # Prefer the surface most different from our current up direction.
-        # At a corner, either neighboring plane is a valid transition target.
-        if same_surface < best_score:
-            best_score = same_surface
+        # A genuine transition surface should be in front of our motion.
+        # This rejects side contacts that otherwise compete with the actual
+        # wall/ceiling we're walking into.
+        var impact := 0.0
+        if approach_velocity.length_squared() > 0.04:
+            impact = maxf(0.0, -approach.dot(normal))
+
+        # At a 90-degree corner the two normals can be equally valid.
+        # The first selected normal gets locked for a short time, preventing
+        # frame-to-frame oscillation between the two surfaces.
+        var difference := 1.0 - same_surface
+
+        # Strongly prefer an actual head-on transition; retain difference as
+        # a tie-breaker when approaching a corner diagonally.
+        var score := impact * 4.0 + difference
+
+        if approach_velocity.length_squared() <= 0.04:
+            score = difference
+
+        if score > best_score:
+            best_score = score
             best_normal = normal
 
     return best_normal
@@ -208,6 +263,16 @@ func _set_target_surface(new_normal: Vector3) -> void:
     if new_normal.dot(surface_up) >= surface_change_dot:
         return
 
+    # During the short corner-transition window, accept only the normal that
+    # belongs to the transition already in progress. This eliminates the
+    # classic wall/corner/ceiling camera jitter.
+    if _surface_transition_lock > 0.0:
+        if target_surface_up.dot(new_normal) < 0.96:
+            return
+        return
+
+    _surface_transition_lock = surface_transition_lock_time
+
     # Transport the stored view direction across the corner BEFORE changing
     # surface_up. This preserves where the player was looking instead of
     # recalculating the camera from the body's already-rotated basis.
@@ -218,6 +283,71 @@ func _set_target_surface(new_normal: Vector3) -> void:
     )
 
     target_surface_up = new_normal
+
+
+func _update_head_bob(
+    delta: float,
+    planar_speed: float,
+    grounded: bool
+) -> void:
+    if not bob_enabled:
+        bob_amount = move_toward(bob_amount, 0.0, bob_smoothing * delta)
+    else:
+        var speed_ratio := clampf(planar_speed / move_speed, 0.0, 1.75)
+        var target_amount := 0.0
+
+        if grounded and planar_speed > 0.25:
+            target_amount = clampf(speed_ratio, 0.0, 1.0)
+
+        bob_amount = lerpf(
+            bob_amount,
+            target_amount,
+            1.0 - exp(-bob_smoothing * delta)
+        )
+
+        if target_amount > 0.0:
+            var sprint_factor := 1.0
+            if Input.is_key_pressed(KEY_SHIFT):
+                sprint_factor = sprint_bob_multiplier
+
+            var frequency := bob_frequency * lerpf(
+                0.88,
+                1.22,
+                clampf(speed_ratio, 0.0, 1.0)
+            ) * sprint_factor
+
+            bob_phase += TAU * frequency * delta
+
+            # Two vertical peaks per gait cycle and a slower side-to-side
+            # sway create a subtle human head movement rather than a sine-wave
+            # camera attached directly to velocity.
+            var vertical := (0.5 - 0.5 * cos(bob_phase * 2.0))
+            vertical -= 0.28
+
+            var lateral := sin(bob_phase)
+            var roll := sin(bob_phase) * bob_roll_amplitude
+            roll += sin(bob_phase * 2.0) * bob_roll_amplitude * 0.35
+
+            bob_position_offset = Vector3(
+                lateral * bob_lateral_amplitude * bob_amount,
+                vertical * bob_vertical_amplitude * bob_amount,
+                0.0
+            )
+
+            bob_roll = roll * bob_amount
+        else:
+            bob_position_offset = bob_position_offset.lerp(
+                Vector3.ZERO,
+                1.0 - exp(-bob_smoothing * delta)
+            )
+            bob_roll = lerpf(
+                bob_roll,
+                0.0,
+                1.0 - exp(-bob_smoothing * delta)
+            )
+
+    camera.position = CAMERA_REST_POSITION + bob_position_offset
+    camera.rotation.z = bob_roll
 
 
 func _update_surface_orientation(delta: float) -> void:
