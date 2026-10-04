@@ -221,48 +221,52 @@ func _physics_process(delta: float) -> void:
 
 
 func _update_camera_collision() -> void:
-    # The camera should sit at the player's head, but never cross a solid
-    # surface. This matters especially at 90-degree corners where the capsule
-    # may remain valid while the camera's offset would place its origin behind
-    # a wall.
+    # Keep the camera at head height relative to the CURRENT surface.
     view_pivot.position = surface_up * CAMERA_HEAD_HEIGHT
 
     var desired_local := bob_position_offset
     var desired_world := view_pivot.global_transform * desired_local
-    var anchor_world := view_pivot.global_position
 
-    var query := PhysicsRayQueryParameters3D.create(
-        anchor_world,
-        desired_world
-    )
-    query.collision_mask = 1
-    query.collide_with_bodies = true
-    query.collide_with_areas = false
-    query.exclude = [self]
-
-    var hit := get_world_3d().direct_space_state.intersect_ray(query)
+    # A sphere test is used instead of a single ray. At a 90-degree corner
+    # the camera can overlap a wall even when the ray itself has no useful
+    # distance to report.
+    var space_state := get_world_3d().direct_space_state
+    var camera_shape := SphereShape3D.new()
+    camera_shape.radius = camera_collision_radius
 
     var safe_world := desired_world
 
-    if not hit.is_empty():
-        var hit_position: Vector3 = hit.position
-        var direction := desired_world - anchor_world
+    # Resolve up to three simultaneous wall contacts (e.g. a tight corner).
+    for _i in range(3):
+        var params := PhysicsShapeQueryParameters3D.new()
+        params.shape = camera_shape
+        params.transform = Transform3D(
+            Basis.IDENTITY,
+            safe_world
+        )
+        params.collision_mask = 1
+        params.collide_with_bodies = true
+        params.collide_with_areas = false
+        params.exclude = [self]
 
-        if direction.length_squared() > 0.000001:
-            var length := direction.length()
-            var safe_distance := maxf(
-                0.0,
-                hit_position.distance_to(anchor_world) - camera_collision_padding
-            )
-            safe_distance = minf(safe_distance, length)
-            safe_world = anchor_world + direction.normalized() * safe_distance
+        var rest := space_state.get_rest_info(params)
+        if rest.is_empty():
+            break
 
-    # Camera3D is at local origin of the pivot; convert the collision-safe
-    # world point back into pivot space and apply only the head-bob offset.
+        var normal: Vector3 = rest.normal.normalized()
+        var point: Vector3 = rest.point
+
+        # Move the camera sphere out of the surface by its radius + padding.
+        # This keeps the near plane away from geometry too.
+        safe_world = point + normal * (
+            camera_collision_radius + camera_collision_padding
+        )
+
     var safe_local := view_pivot.global_transform.affine_inverse() * safe_world
+
     _camera_position = _camera_position.lerp(
         safe_local,
-        0.65
+        0.8
     )
 
     camera.position = _camera_position
