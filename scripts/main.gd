@@ -72,16 +72,17 @@ func _build_room() -> void:
     _make_box("LeftWall", Vector3(-11.5, 6, 0), Vector3(1, 13, 24), side_material)
     _make_box("RightWall", Vector3(11.5, 6, 0), Vector3(1, 13, 24), side_material)
 
-    _make_box("FrontAccent", Vector3(0, 0.02, -10.92), Vector3(22, 0.08, 0.08), accent_material)
-    _make_box("LeftAccent", Vector3(-10.92, 0.02, 0), Vector3(0.08, 0.08, 22), accent_material)
-    _make_box("RightAccent", Vector3(10.92, 0.02, 0), Vector3(0.08, 0.08, 22), accent_material)
+    _make_box("FrontAccent", Vector3(0, 0.02, -10.92), Vector3(22, 0.08, 0.08), accent_material, false)
+    _make_box("LeftAccent", Vector3(-10.92, 0.02, 0), Vector3(0.08, 0.08, 22), accent_material, false)
+    _make_box("RightAccent", Vector3(10.92, 0.02, 0), Vector3(0.08, 0.08, 22), accent_material, false)
 
 
 func _make_box(
     box_name: String,
     box_position: Vector3,
     box_size: Vector3,
-    material: StandardMaterial3D
+    material: StandardMaterial3D,
+    with_collision: bool = true
 ) -> void:
     var body := StaticBody3D.new()
     body.name = box_name
@@ -97,11 +98,12 @@ func _make_box(
     mesh.mesh = box_mesh
     body.add_child(mesh)
 
-    var collision := CollisionShape3D.new()
-    var box_shape := BoxShape3D.new()
-    box_shape.size = box_size
-    collision.shape = box_shape
-    body.add_child(collision)
+    if with_collision:
+        var collision := CollisionShape3D.new()
+        var box_shape := BoxShape3D.new()
+        box_shape.size = box_size
+        collision.shape = box_shape
+        body.add_child(collision)
 
 
 func _material(color: Color, roughness: float) -> StandardMaterial3D:
