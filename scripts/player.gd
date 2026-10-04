@@ -54,7 +54,13 @@ var bob_roll: float = 0.0
 var _camera_position := Vector3.ZERO
 
 
+# Physics up changes immediately when a new surface is acquired. This makes
+# gravity point at the correct plane on the VERY NEXT physics step.
 var surface_up: Vector3 = Vector3.UP
+
+# Visual up rotates smoothly toward the physics up. Separating these prevents
+# gravity bugs during transitions while keeping the camera/body rotation smooth.
+var visual_up: Vector3 = Vector3.UP
 var target_surface_up: Vector3 = Vector3.UP
 
 # Horizontal view direction in world space. This is deliberately NOT read
@@ -74,6 +80,7 @@ var _surface_transition_lock: float = 0.0
 
 func _ready() -> void:
     up_direction = surface_up
+    visual_up = surface_up
     floor_max_angle = PI * 0.5
     floor_snap_length = surface_contact_snap
     safe_margin = 0.03
@@ -93,7 +100,7 @@ func _input(event: InputEvent) -> void:
     if event is InputEventMouseMotion and _mouse_captured:
         # Yaw is around the player's CURRENT surface normal, not world Y.
         look_forward = look_forward.rotated(
-            surface_up,
+            visual_up,
             -event.screen_relative.x * mouse_sensitivity
         ).normalized()
 
@@ -124,7 +131,9 @@ func _physics_process(delta: float) -> void:
             _surface_transition_lock - delta
         )
 
-    # Use the surface from the previous frame for this movement step.
+    # Physics always uses the current surface. A transition updates
+    # this immediately after the previous move, so gravity cannot keep
+    # pulling sideways toward the old plane.
     up_direction = surface_up
 
     _project_look_onto_surface()
@@ -137,8 +146,8 @@ func _physics_process(delta: float) -> void:
     if input_2d.length_squared() > 1.0:
         input_2d = input_2d.normalized()
 
-    var forward := look_forward
-    var right := look_forward.cross(surface_up).normalized()
+    var forward := _project_on_plane(look_forward, surface_up).normalized()
+    var right := forward.cross(surface_up).normalized()
 
     var desired_direction := right * input_2d.x + forward * input_2d.y
     desired_direction = _project_on_plane(desired_direction, surface_up)
@@ -204,6 +213,13 @@ func _physics_process(delta: float) -> void:
 
     if collision_normal.length_squared() > 0.0001:
         _set_target_surface(collision_normal)
+
+        # The new surface is now the physical floor. Re-evaluate attachment
+        # using the new up direction so an upper face of a generated block
+        # immediately catches the player instead of letting gravity pull them
+        # back toward the previous wall.
+        up_direction = surface_up
+        apply_floor_snap()
 
     # Move the body's orientation toward the new plane.
     _update_surface_orientation(delta)
@@ -325,9 +341,8 @@ func _set_target_surface(new_normal: Vector3) -> void:
     if new_normal.dot(surface_up) >= surface_change_dot:
         return
 
-    # During the short corner-transition window, accept only the normal that
-    # belongs to the transition already in progress. This eliminates the
-    # classic wall/corner/ceiling camera jitter.
+    # During the short corner-transition window, accept only the same target.
+    # This prevents rapid wall <-> top oscillation at sharp generated edges.
     if _surface_transition_lock > 0.0:
         if target_surface_up.dot(new_normal) < 0.96:
             return
@@ -335,16 +350,33 @@ func _set_target_surface(new_normal: Vector3) -> void:
 
     _surface_transition_lock = surface_transition_lock_time
 
-    # Transport the stored view direction across the corner BEFORE changing
-    # surface_up. This preserves where the player was looking instead of
-    # recalculating the camera from the body's already-rotated basis.
+    var old_up := surface_up
+
+    # Carry the player's view direction across the corner.
     look_forward = _transport_vector(
         look_forward,
-        surface_up,
+        old_up,
         new_normal
     )
 
+    # IMPORTANT: physics up changes immediately. Visual orientation remains
+    # smooth through visual_up in _update_surface_orientation().
+    surface_up = new_normal
     target_surface_up = new_normal
+    up_direction = surface_up
+
+    # Remove the component of velocity that points into/out of the old/new
+    # surface. Preserve the current speed along the new tangent plane.
+    var current_speed := velocity.length()
+    var new_tangent_velocity := _project_on_plane(
+        velocity,
+        new_normal
+    )
+
+    if new_tangent_velocity.length_squared() > 0.0001 and current_speed > 0.01:
+        velocity = new_tangent_velocity.normalized() * current_speed
+    else:
+        velocity = new_tangent_velocity
 
 
 func _update_head_bob(
@@ -424,39 +456,35 @@ func _update_head_bob(
 
 func _update_surface_orientation(delta: float) -> void:
     var blend := 1.0 - exp(-reorientation_speed * delta)
-    surface_up = surface_up.slerp(
-        target_surface_up,
+
+    # Physics surface_up is already the new gravity direction.
+    # Only the visual body/camera orientation is interpolated.
+    visual_up = visual_up.slerp(
+        surface_up,
         blend
     ).normalized()
 
-    up_direction = surface_up
-    _project_look_onto_surface()
+    if visual_up.dot(surface_up) > 0.9999:
+        visual_up = surface_up
 
-    # Rebuild the body basis from our independent look direction + surface up.
-    # No camera yaw is ever recovered from the changing transform.
     _rebuild_body_basis()
-
-    # When we are extremely close to the target, finish exactly on it.
-    if surface_up.dot(target_surface_up) > 0.9999:
-        surface_up = target_surface_up
-        up_direction = surface_up
-        _project_look_onto_surface()
-        _rebuild_body_basis()
 
 
 func _rebuild_body_basis() -> void:
-    var forward := _project_on_plane(look_forward, surface_up)
+    # During a transition the visual body is between the old and new planes,
+    # while physics already uses the new plane. Keep the camera looking
+    # tangent to the visual surface so the rotation appears continuous.
+    var forward := _project_on_plane(look_forward, visual_up)
 
     if forward.length_squared() < 0.0001:
-        forward = _fallback_forward(surface_up)
+        forward = _fallback_forward(visual_up)
 
     forward = forward.normalized()
-    look_forward = forward
 
-    var right := forward.cross(surface_up)
+    var right := forward.cross(visual_up)
 
     if right.length_squared() < 0.0001:
-        right = _fallback_right(surface_up, forward)
+        right = _fallback_right(visual_up, forward)
 
     right = right.normalized()
 
@@ -466,7 +494,7 @@ func _rebuild_body_basis() -> void:
     # Z = -forward
     global_transform.basis = Basis(
         right,
-        surface_up,
+        visual_up,
         -forward
     ).orthonormalized()
 
