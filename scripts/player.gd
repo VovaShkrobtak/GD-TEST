@@ -216,14 +216,12 @@ func _physics_process(delta: float) -> void:
     var collision_normal := _find_transition_normal(velocity_before_collision)
 
     if collision_normal.length_squared() > 0.0001:
-        if _can_support_on_surface(collision_normal):
-            _set_target_surface(collision_normal)
+        _set_target_surface(collision_normal)
 
-            # Only snap once the new plane is actually on the support side
-            # of the capsule. A collision with the top/front edge alone is
-            # NOT enough to change gravity.
-            up_direction = surface_up
-            apply_floor_snap()
+        # Only transition candidates returned by _find_transition_normal()
+        # have already passed the capsule-contact test.
+        up_direction = surface_up
+        apply_floor_snap()
 
     # Move the body's orientation toward the new plane.
     _update_surface_orientation(delta)
