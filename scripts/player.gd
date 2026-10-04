@@ -81,6 +81,17 @@ var _last_surface_name := "FLOOR"
 var _surface_transition_lock: float = 0.0
 @export var surface_transition_lock_time: float = 0.38
 
+# During a corner transition, gravity is suppressed while the capsule rotates
+# from the old surface to the new one. This lets the feet reach the corner
+# instead of the upper part of the capsule making the player fall away.
+var _transition_active := false
+var _transition_time := 0.0
+var _transition_from_up := Vector3.UP
+var _transition_to_up := Vector3.UP
+var _transition_from_forward := Vector3.FORWARD
+var _transition_to_forward := Vector3.FORWARD
+@export var surface_transition_duration: float = 0.34
+
 
 func _ready() -> void:
     up_direction = surface_up
@@ -173,7 +184,10 @@ func _physics_process(delta: float) -> void:
 
         var normal_velocity := velocity.dot(surface_up)
 
-        if on_support:
+        if _transition_active:
+            # No gravity during the actual corner roll.
+            normal_velocity = 0.0
+        elif on_support:
             normal_velocity = minf(normal_velocity, 0.0)
         else:
             normal_velocity -= gravity * delta
@@ -189,7 +203,9 @@ func _physics_process(delta: float) -> void:
 
         var normal_velocity := velocity.dot(surface_up)
 
-        if on_support:
+        if _transition_active:
+            normal_velocity = 0.0
+        elif on_support:
             normal_velocity = 0.0
         else:
             normal_velocity -= gravity * delta
@@ -218,10 +234,9 @@ func _physics_process(delta: float) -> void:
     if collision_normal.length_squared() > 0.0001:
         _set_target_surface(collision_normal)
 
-        # Only transition candidates returned by _find_transition_normal()
-        # have already passed the capsule-contact test.
         up_direction = surface_up
-        apply_floor_snap()
+        if not _transition_active:
+            apply_floor_snap()
 
     # Move the body's orientation toward the new plane.
     _update_surface_orientation(delta)
@@ -368,42 +383,92 @@ func _set_target_surface(new_normal: Vector3) -> void:
     if new_normal.dot(surface_up) >= surface_change_dot:
         return
 
-    # During the short corner-transition window, accept only the same target.
-    # This prevents rapid wall <-> top oscillation at sharp generated edges.
+    if _transition_active:
+        return
+
     if _surface_transition_lock > 0.0:
-        if target_surface_up.dot(new_normal) < 0.96:
-            return
         return
 
     _surface_transition_lock = surface_transition_lock_time
 
-    var old_up := surface_up
+    _transition_active = true
+    _transition_time = 0.0
 
-    # Carry the player's view direction across the corner.
-    look_forward = _transport_vector(
+    _transition_from_up = surface_up
+    _transition_to_up = new_normal
+
+    _transition_from_forward = _project_on_plane(
         look_forward,
-        old_up,
+        surface_up
+    ).normalized()
+
+    _transition_to_forward = _transport_vector(
+        _transition_from_forward,
+        surface_up,
         new_normal
     )
 
-    # IMPORTANT: physics up changes immediately. Visual orientation remains
-    # smooth through visual_up in _update_surface_orientation().
-    surface_up = new_normal
-    target_surface_up = new_normal
-    up_direction = surface_up
 
-    # Remove the component of velocity that points into/out of the old/new
-    # surface. Preserve the current speed along the new tangent plane.
-    var current_speed := velocity.length()
-    var new_tangent_velocity := _project_on_plane(
-        velocity,
-        new_normal
-    )
+func _update_surface_orientation(delta: float) -> void:
+    if _transition_active:
+        _transition_time += delta
 
-    if new_tangent_velocity.length_squared() > 0.0001 and current_speed > 0.01:
-        velocity = new_tangent_velocity.normalized() * current_speed
-    else:
-        velocity = new_tangent_velocity
+        var transition_weight := clampf(
+            _transition_time / maxf(surface_transition_duration, 0.001),
+            0.0,
+            1.0
+        )
+
+        var smooth_weight := transition_weight * transition_weight * (
+            3.0 - 2.0 * transition_weight
+        )
+
+        surface_up = _transition_from_up.slerp(
+            _transition_to_up,
+            smooth_weight
+        ).normalized()
+
+        look_forward = _transition_from_forward.slerp(
+            _transition_to_forward,
+            smooth_weight
+        ).normalized()
+
+        up_direction = surface_up
+
+        visual_up = visual_up.slerp(
+            surface_up,
+            1.0 - exp(-reorientation_speed * delta)
+        ).normalized()
+
+        _project_look_onto_surface()
+        _rebuild_body_basis()
+
+        if transition_weight >= 1.0:
+            surface_up = _transition_to_up
+            look_forward = _transition_to_forward
+            visual_up = surface_up
+
+            _transition_active = false
+            _transition_time = 0.0
+
+            up_direction = surface_up
+            _project_look_onto_surface()
+            _rebuild_body_basis()
+
+        return
+
+    var blend := 1.0 - exp(-reorientation_speed * delta)
+
+    visual_up = visual_up.slerp(
+        surface_up,
+        blend
+    ).normalized()
+
+    if visual_up.dot(surface_up) > 0.9999:
+        visual_up = surface_up
+
+    _project_look_onto_surface()
+    _rebuild_body_basis()
 
 
 func _update_head_bob(
