@@ -230,9 +230,9 @@ func _align_body_to_surface(new_up: Vector3, preferred_forward: Vector3) -> void
 
 
 func _update_surface_name() -> void:
-    var name := get_surface_name()
-    if name != _last_surface_name:
-        _last_surface_name = name
+    var surface_label := get_surface_name()
+    if surface_label != _last_surface_name:
+        _last_surface_name = surface_label
 
 
 func get_surface_name() -> String:
