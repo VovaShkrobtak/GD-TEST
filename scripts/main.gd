@@ -34,7 +34,7 @@ func _setup_environment() -> void:
     environment.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
     environment.ambient_light_color = Color(0.46, 0.5, 0.58)
     environment.ambient_light_energy = 0.85
-    environment.reflected_light_source = Environment.REFLECTION_SOURCE_DISABLED
+    environment.reflection_source = Environment.REFLECTION_SOURCE_DISABLED
 
     var world_environment := WorldEnvironment.new()
     world_environment.environment = environment
