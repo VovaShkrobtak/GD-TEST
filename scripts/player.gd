@@ -537,22 +537,6 @@ func _update_head_bob(
     camera.rotation.z = bob_roll
 
 
-func _update_surface_orientation(delta: float) -> void:
-    var blend := 1.0 - exp(-reorientation_speed * delta)
-
-    # Physics surface_up is already the new gravity direction.
-    # Only the visual body/camera orientation is interpolated.
-    visual_up = visual_up.slerp(
-        surface_up,
-        blend
-    ).normalized()
-
-    if visual_up.dot(surface_up) > 0.9999:
-        visual_up = surface_up
-
-    _rebuild_body_basis()
-
-
 func _rebuild_body_basis() -> void:
     # During a transition the visual body is between the old and new planes,
     # while physics already uses the new plane. Keep the camera looking
