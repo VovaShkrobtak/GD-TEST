@@ -27,7 +27,7 @@ extends CharacterBody3D
 @export var surface_contact_snap: float = 0.28
 @export var camera_collision_padding: float = 0.06
 @export var camera_collision_radius: float = 0.10
-@export var surface_support_min_distance: float = 0.55
+@export var surface_support_min_distance: float = 0.72
 @export var surface_support_max_distance: float = 1.20
 
 @export_category("Look")
