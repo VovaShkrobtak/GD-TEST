@@ -203,7 +203,7 @@ func _overlaps_existing_structure(
         if existing_body == null:
             continue
 
-        var existing_size := existing_body.get_meta("box_size", Vector3.ZERO)
+        var existing_size: Vector3 = existing_body.get_meta("box_size", Vector3.ZERO)
         var existing_center := existing_body.position
 
         var existing_min := Vector3(
