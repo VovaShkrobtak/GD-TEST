@@ -245,10 +245,16 @@ func _physics_process(delta: float) -> void:
     up_direction = surface_up
     floor_snap_length = surface_contact_snap
 
-    if is_on_floor():
+    # Do not floor-snap while rolling around a corner. CharacterBody3D's
+    # snap direction is itself changing during this phase.
+    if is_on_floor() and not _transition_active:
         apply_floor_snap()
 
-    _update_head_bob(delta, planar_speed, is_on_floor())
+    _update_head_bob(
+        delta,
+        planar_speed,
+        is_on_floor() or _transition_active
+    )
     _update_camera_collision()
     _update_surface_name()
 
@@ -315,15 +321,17 @@ func _find_transition_normal(approach_velocity: Vector3) -> Vector3:
     var best_normal := Vector3.ZERO
     var best_score := -1000000.0
     var center := global_transform * Vector3(0.0, BODY_CENTER_OFFSET, 0.0)
+
+    var has_motion := approach_velocity.length_squared() > 0.04
     var approach := approach_velocity.normalized()
 
     for index in range(get_slide_collision_count()):
         var collision := get_slide_collision(index)
         var normal := collision.get_normal().normalized()
 
-        # The prototype room is axis-aligned. Ignore corner/edge normals;
-        # they are not real walkable planes and are the main source of
-        # accidental floor/wall/ceiling switching.
+        # Generated room geometry is made from axis-aligned boxes. Only accept
+        # clean plane normals here; edge normals are ambiguous and can make the
+        # controller bounce between two surfaces.
         var axis_alignment := maxf(
             absf(normal.x),
             maxf(absf(normal.y), absf(normal.z))
@@ -331,44 +339,27 @@ func _find_transition_normal(approach_velocity: Vector3) -> Vector3:
         if axis_alignment < surface_normal_axis_threshold:
             continue
 
-        # Ignore our current plane.
         var same_surface := normal.dot(surface_up)
         if same_surface >= surface_change_dot:
             continue
 
-        # A surface can become our new "floor" only when the contact point is
-        # on the support side of the capsule. This is the key ledge fix.
-        #
-        # Examples:
-        #   floor:  contact is ~0.9m below center -> accepted
-        #   wall:   contact is ~0.42m sideways     -> accepted
-        #   ceiling: contact is ~0.9m above center,
-        #            but normal is DOWN -> accepted
-        #
-        # When we are still below the TOP of a block, touching its upper edge
-        # does not satisfy this test because the contact is on the wrong side
-        # of the capsule.
-        var contact := collision.get_position()
-        var support_offset := (contact - center).dot(normal)
+        var score := 1.0 - same_surface
 
-        if support_offset > -surface_support_min_offset:
-            continue
+        if has_motion:
+            # The surface must be associated with the direction in which the
+            # player is actually moving. Use absolute alignment because for a
+            # wall the normal points AGAINST motion, while for a floor/ceiling
+            # approached from below/above it can point WITH motion.
+            var movement_alignment := absf(normal.dot(approach))
+            score += movement_alignment * 3.0
 
-        if support_offset < -surface_support_max_offset:
-            continue
+            # Prefer contacts whose actual contact point is not behind the
+            # player. This helps reject a stray side collision at a corner.
+            var contact := collision.get_position()
+            var contact_ahead := (contact - center).dot(approach)
 
-        # Prefer planes that are in the direction of actual motion. This keeps
-        # a side contact from stealing a transition when the player is moving
-        # toward the top/front plane.
-        var impact := 0.0
-        if approach_velocity.length_squared() > 0.04:
-            impact = maxf(0.0, -approach.dot(normal))
-
-        var difference := 1.0 - same_surface
-        var score := impact * 4.0 + difference
-
-        if approach_velocity.length_squared() <= 0.04:
-            score = difference
+            if contact_ahead < -0.35:
+                score -= 2.0
 
         if score > best_score:
             best_score = score
