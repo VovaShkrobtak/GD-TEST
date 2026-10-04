@@ -1,7 +1,7 @@
 extends Node3D
 
-@onready var player: CharacterBody3D = $Player
-@onready var room_generator: Node3D = $RoomGenerator
+@onready var player = $Player
+@onready var room_generator: RoomGenerator = $RoomGenerator
 @onready var info: Label = $HUD/Info
 @onready var seed_label: Label = $HUD/Seed
 
