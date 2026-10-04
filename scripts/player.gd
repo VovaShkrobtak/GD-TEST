@@ -221,8 +221,6 @@ func _set_target_surface(new_normal: Vector3) -> void:
 
 
 func _update_surface_orientation(delta: float) -> void:
-    var old_up := surface_up
-
     var blend := 1.0 - exp(-reorientation_speed * delta)
     surface_up = surface_up.slerp(
         target_surface_up,
@@ -238,14 +236,6 @@ func _update_surface_orientation(delta: float) -> void:
 
     # When we are extremely close to the target, finish exactly on it.
     if surface_up.dot(target_surface_up) > 0.9999:
-        surface_up = target_surface_up
-        up_direction = surface_up
-        _project_look_onto_surface()
-        _rebuild_body_basis()
-
-    # Avoid unused-variable warnings while keeping this useful during
-    # debugging of abrupt normal changes.
-    if old_up.dot(surface_up) < 0.0:
         surface_up = target_surface_up
         up_direction = surface_up
         _project_look_onto_surface()
