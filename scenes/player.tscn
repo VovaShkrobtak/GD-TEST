@@ -1,0 +1,39 @@
+[gd_scene load_steps=4 format=3]
+
+[ext_resource type="Script" path="res://scripts/player.gd" id="1_player"]
+
+[sub_resource type="CapsuleShape3D" id="CapsuleShape3D_player"]
+radius = 0.42
+height = 1.8
+
+[sub_resource type="CapsuleMesh" id="CapsuleMesh_player"]
+radius = 0.42
+height = 1.8
+radial_segments = 12
+rings = 4
+
+[node name="Player" type="CharacterBody3D"]
+script = ExtResource("1_player")
+collision_layer = 1
+collision_mask = 1
+floor_max_angle = 1.82
+floor_snap_length = 0.28
+safe_margin = 0.03
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="."]
+position = Vector3(0, 0.9, 0)
+shape = SubResource("CapsuleShape3D_player")
+
+[node name="Body" type="MeshInstance3D" parent="."]
+position = Vector3(0, 0.9, 0)
+mesh = SubResource("CapsuleMesh_player")
+visible = false
+
+[node name="ViewPivot" type="Node3D" parent="."]
+
+[node name="Camera3D" type="Camera3D" parent="ViewPivot"]
+position = Vector3(0, 1.5, 0)
+current = true
+fov = 76.0
+near = 0.03
+far = 250.0
