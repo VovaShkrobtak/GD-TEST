@@ -25,6 +25,8 @@ extends CharacterBody3D
 @export var reorientation_speed: float = 8.0
 @export_range(0.0, 1.0, 0.01) var surface_change_dot: float = 0.86
 @export var surface_contact_snap: float = 0.28
+@export var camera_collision_padding: float = 0.06
+@export var camera_collision_radius: float = 0.10
 
 @export_category("Look")
 @export var mouse_sensitivity: float = 0.0023
@@ -42,12 +44,14 @@ extends CharacterBody3D
 @onready var view_pivot: Node3D = $ViewPivot
 @onready var camera: Camera3D = $ViewPivot/Camera3D
 
-const CAMERA_REST_POSITION := Vector3(0.0, 1.5, 0.0)
+const CAMERA_HEAD_HEIGHT := 1.5
+const CAMERA_REST_POSITION := Vector3(0.0, 0.0, 0.0)
 
 var bob_phase: float = 0.0
 var bob_amount: float = 0.0
 var bob_position_offset := Vector3.ZERO
 var bob_roll: float = 0.0
+var _camera_position := Vector3.ZERO
 
 
 var surface_up: Vector3 = Vector3.UP
@@ -81,6 +85,8 @@ func _ready() -> void:
 
     Input.set_mouse_mode(Input.MOUSE_MODE_CAPTURED)
     view_pivot.rotation.x = pitch
+    view_pivot.position = surface_up * CAMERA_HEAD_HEIGHT
+    _camera_position = Vector3.ZERO
 
 
 func _input(event: InputEvent) -> void:
@@ -210,7 +216,56 @@ func _physics_process(delta: float) -> void:
         apply_floor_snap()
 
     _update_head_bob(delta, planar_speed, is_on_floor())
+    _update_camera_collision()
     _update_surface_name()
+
+
+func _update_camera_collision() -> void:
+    # The camera should sit at the player's head, but never cross a solid
+    # surface. This matters especially at 90-degree corners where the capsule
+    # may remain valid while the camera's offset would place its origin behind
+    # a wall.
+    view_pivot.position = surface_up * CAMERA_HEAD_HEIGHT
+
+    var desired_local := bob_position_offset
+    var desired_world := view_pivot.global_transform * desired_local
+    var anchor_world := view_pivot.global_position
+
+    var query := PhysicsRayQueryParameters3D.create(
+        anchor_world,
+        desired_world
+    )
+    query.collision_mask = 1
+    query.collide_with_bodies = true
+    query.collide_with_areas = false
+    query.exclude = [self]
+
+    var hit := get_world_3d().direct_space_state.intersect_ray(query)
+
+    var safe_world := desired_world
+
+    if not hit.is_empty():
+        var hit_position: Vector3 = hit.position
+        var direction := desired_world - anchor_world
+
+        if direction.length_squared() > 0.000001:
+            var length := direction.length()
+            var safe_distance := maxf(
+                0.0,
+                hit_position.distance_to(anchor_world) - camera_collision_padding
+            )
+            safe_distance = minf(safe_distance, length)
+            safe_world = anchor_world + direction.normalized() * safe_distance
+
+    # Camera3D is at local origin of the pivot; convert the collision-safe
+    # world point back into pivot space and apply only the head-bob offset.
+    var safe_local := view_pivot.global_transform.affine_inverse() * safe_world
+    _camera_position = _camera_position.lerp(
+        safe_local,
+        0.65
+    )
+
+    camera.position = _camera_position
 
 
 func _find_transition_normal(approach_velocity: Vector3) -> Vector3:
@@ -355,7 +410,8 @@ func _update_head_bob(
                 1.0 - exp(-bob_smoothing * delta)
             )
 
-    camera.position = CAMERA_REST_POSITION + bob_position_offset
+    # Position is finalized by _update_camera_collision() after all movement
+    # and surface orientation changes for the frame.
     camera.rotation.z = bob_roll
 
 
