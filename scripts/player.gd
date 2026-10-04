@@ -85,7 +85,7 @@ func _ready() -> void:
 
     Input.set_mouse_mode(Input.MOUSE_MODE_CAPTURED)
     view_pivot.rotation.x = pitch
-    view_pivot.position = surface_up * CAMERA_HEAD_HEIGHT
+    view_pivot.position = Vector3(0.0, CAMERA_HEAD_HEIGHT, 0.0)
     _camera_position = Vector3.ZERO
 
 
@@ -222,7 +222,10 @@ func _physics_process(delta: float) -> void:
 
 func _update_camera_collision() -> void:
     # Keep the camera at head height relative to the CURRENT surface.
-    view_pivot.position = surface_up * CAMERA_HEAD_HEIGHT
+    # ViewPivot is a child of the player. Its local +Y already points
+    # along surface_up because the player basis is rebuilt from surface_up.
+    # Do NOT put a world-space normal into this local position.
+    view_pivot.position = Vector3(0.0, CAMERA_HEAD_HEIGHT, 0.0)
 
     var desired_local := bob_position_offset
     var desired_world := view_pivot.global_transform * desired_local
