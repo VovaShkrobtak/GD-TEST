@@ -218,7 +218,7 @@ func _find_transition_normal(approach_velocity: Vector3) -> Vector3:
         return Vector3.ZERO
 
     var best_normal := Vector3.ZERO
-    var best_score := -INF
+    var best_score := -1000000.0
 
     var approach := approach_velocity.normalized()
 
@@ -292,6 +292,15 @@ func _update_head_bob(
 ) -> void:
     if not bob_enabled:
         bob_amount = move_toward(bob_amount, 0.0, bob_smoothing * delta)
+        bob_position_offset = bob_position_offset.lerp(
+            Vector3.ZERO,
+            1.0 - exp(-bob_smoothing * delta)
+        )
+        bob_roll = lerpf(
+            bob_roll,
+            0.0,
+            1.0 - exp(-bob_smoothing * delta)
+        )
     else:
         var speed_ratio := clampf(planar_speed / move_speed, 0.0, 1.75)
         var target_amount := 0.0
