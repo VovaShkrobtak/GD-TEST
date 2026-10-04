@@ -27,8 +27,9 @@ extends CharacterBody3D
 @export var surface_contact_snap: float = 0.28
 @export var camera_collision_padding: float = 0.06
 @export var camera_collision_radius: float = 0.10
-@export var surface_support_min_distance: float = 0.72
-@export var surface_support_max_distance: float = 1.20
+@export_range(0.0, 1.0, 0.01) var surface_support_min_offset: float = 0.20
+@export var surface_support_max_offset: float = 1.30
+@export_range(0.80, 0.99, 0.01) var surface_normal_axis_threshold: float = 0.92
 
 @export_category("Look")
 @export var mouse_sensitivity: float = 0.0023
@@ -300,23 +301,52 @@ func _find_transition_normal(approach_velocity: Vector3) -> Vector3:
 
     var best_normal := Vector3.ZERO
     var best_score := -1000000.0
+    var center := global_transform * Vector3(0.0, BODY_CENTER_OFFSET, 0.0)
     var approach := approach_velocity.normalized()
 
     for index in range(get_slide_collision_count()):
         var collision := get_slide_collision(index)
         var normal := collision.get_normal().normalized()
 
-        # Ignore surfaces that are basically the plane we're already walking on.
+        # The prototype room is axis-aligned. Ignore corner/edge normals;
+        # they are not real walkable planes and are the main source of
+        # accidental floor/wall/ceiling switching.
+        var axis_alignment := maxf(
+            absf(normal.x),
+            maxf(absf(normal.y), absf(normal.z))
+        )
+        if axis_alignment < surface_normal_axis_threshold:
+            continue
+
+        # Ignore our current plane.
         var same_surface := normal.dot(surface_up)
         if same_surface >= surface_change_dot:
             continue
 
-        # Most important rule: a candidate must be capable of supporting the
-        # capsule from its -normal side. This rejects the top of a block while
-        # the player is still below the block's top edge.
-        if not _can_support_on_surface(normal):
+        # A surface can become our new "floor" only when the contact point is
+        # on the support side of the capsule. This is the key ledge fix.
+        #
+        # Examples:
+        #   floor:  contact is ~0.9m below center -> accepted
+        #   wall:   contact is ~0.42m sideways     -> accepted
+        #   ceiling: contact is ~0.9m above center,
+        #            but normal is DOWN -> accepted
+        #
+        # When we are still below the TOP of a block, touching its upper edge
+        # does not satisfy this test because the contact is on the wrong side
+        # of the capsule.
+        var contact := collision.get_position()
+        var support_offset := (contact - center).dot(normal)
+
+        if support_offset > -surface_support_min_offset:
             continue
 
+        if support_offset < -surface_support_max_offset:
+            continue
+
+        # Prefer planes that are in the direction of actual motion. This keeps
+        # a side contact from stealing a transition when the player is moving
+        # toward the top/front plane.
         var impact := 0.0
         if approach_velocity.length_squared() > 0.04:
             impact = maxf(0.0, -approach.dot(normal))
@@ -332,41 +362,6 @@ func _find_transition_normal(approach_velocity: Vector3) -> Vector3:
             best_normal = normal
 
     return best_normal
-
-
-func _can_support_on_surface(candidate_normal: Vector3) -> bool:
-    var center := global_transform * Vector3(0.0, BODY_CENTER_OFFSET, 0.0)
-
-    # Cast from the center toward the side that would become the player's
-    # "feet". The surface must be roughly one capsule half-height away.
-    var from := center + candidate_normal * 0.02
-    var to := from - candidate_normal * surface_support_max_distance
-
-    var query := PhysicsRayQueryParameters3D.create(from, to)
-    query.collision_mask = 1
-    query.collide_with_bodies = true
-    query.collide_with_areas = false
-    query.exclude = [self]
-
-    var hit := get_world_3d().direct_space_state.intersect_ray(query)
-
-    if hit.is_empty():
-        return false
-
-    var hit_normal: Vector3 = hit.normal.normalized()
-
-    # Make sure the hit is actually the candidate plane, not another nearby
-    # plane that happens to lie in the same ray.
-    if hit_normal.dot(candidate_normal) < 0.92:
-        return false
-
-    var hit_position: Vector3 = hit.position
-    var distance := center.distance_to(hit_position)
-
-    return (
-        distance >= surface_support_min_distance
-        and distance <= surface_support_max_distance
-    )
 
 
 func _set_target_surface(new_normal: Vector3) -> void:
